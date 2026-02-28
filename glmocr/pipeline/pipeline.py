@@ -21,7 +21,6 @@ from glmocr.ocr_client import OCRClient
 from glmocr.parser_result import PipelineResult
 from glmocr.postprocess import ResultFormatter
 from glmocr.utils.image_utils import crop_image_region
-from glmocr.utils.image_utils import load_image_to_base64
 from glmocr.utils.logging import get_logger, get_profiler
 
 if TYPE_CHECKING:
@@ -90,7 +89,6 @@ class Pipeline:
         result_formatter: Optional[ResultFormatter] = None,
     ):
         self.config = config
-        self.enable_layout = config.enable_layout
 
         # Unified page loader
         self.page_loader = PageLoader(config.page_loader)
@@ -104,20 +102,20 @@ class Pipeline:
         else:
             self.result_formatter = ResultFormatter(config.result_formatter)
 
-        # Layout detector (initialized only when enabled)
-        if self.enable_layout:
-            if layout_detector is not None:
-                self.layout_detector = layout_detector
-            else:
-                from glmocr.layout import PPDocLayoutDetector
+        # Layout detector
+        if layout_detector is not None:
+            self.layout_detector = layout_detector
+        else:
+            from glmocr.layout import PPDocLayoutDetector
 
-                if PPDocLayoutDetector is None:
-                    from glmocr.layout import _raise_layout_import_error
+            if PPDocLayoutDetector is None:
+                from glmocr.layout import _raise_layout_import_error
 
-                    _raise_layout_import_error()
+                _raise_layout_import_error()
 
-                self.layout_detector = PPDocLayoutDetector(config.layout)
-            self.max_workers = config.max_workers
+            self.layout_detector = PPDocLayoutDetector(config.layout)
+
+        self.max_workers = config.max_workers
         self._page_maxsize = getattr(config, "page_maxsize", 100)
         self._region_maxsize = getattr(config, "region_maxsize", 800)
 
@@ -171,113 +169,6 @@ class Pipeline:
         Yields:
             PipelineResult per input URL (one image or one PDF).
         """
-
-        if not self.enable_layout:
-            image_urls = self._extract_image_urls(request_data)
-            if not image_urls:
-                request_data = self.page_loader.build_request(request_data)
-                response, status_code = self.ocr_client.process(request_data)
-                if status_code != 200:
-                    raise Exception(
-                        f"OCR request failed: {response}, status_code: {status_code}"
-                    )
-                content = (
-                    response.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content", "")
-                )
-                json_result, markdown_result = self.result_formatter.format_ocr_result(
-                    content
-                )
-                yield PipelineResult(
-                    json_result=json_result,
-                    markdown_result=markdown_result,
-                    original_images=[],
-                    layout_vis_dir=layout_vis_output_dir,
-                )
-                return
-            pages, unit_indices = self.page_loader.load_pages_with_unit_indices(
-                image_urls
-            )
-            from copy import deepcopy
-
-            base_request_data = deepcopy(request_data)
-            cleaned_messages = []
-            for msg in base_request_data.get("messages", []):
-                if msg.get("role") != "user":
-                    cleaned_messages.append(msg)
-                    continue
-                contents = msg.get("content", [])
-                if isinstance(contents, list):
-                    contents = [c for c in contents if c.get("type") != "image_url"]
-                cleaned_messages.append({**msg, "content": contents})
-            base_request_data["messages"] = cleaned_messages
-
-            num_units = len(image_urls)
-            original_inputs = [
-                (url[7:] if url.startswith("file://") else url) for url in image_urls
-            ]
-            unit_contents: Dict[int, List[str]] = {u: [] for u in range(num_units)}
-            for page_idx, page in enumerate(pages):
-                u = (
-                    (unit_indices or [0])[page_idx]
-                    if page_idx < len(unit_indices or [])
-                    else 0
-                )
-                img_b64 = load_image_to_base64(
-                    page,
-                    t_patch_size=self.page_loader.t_patch_size,
-                    max_pixels=self.page_loader.max_pixels,
-                    image_format=self.page_loader.image_format,
-                    patch_expand_factor=self.page_loader.patch_expand_factor,
-                    min_pixels=self.page_loader.min_pixels,
-                )
-                data_url = f"data:image/{self.page_loader.image_format.lower()};base64,{img_b64}"
-                per_request = deepcopy(base_request_data)
-                user_msg = None
-                for m in per_request.get("messages", []):
-                    if m.get("role") == "user" and isinstance(m.get("content"), list):
-                        user_msg = m
-                        break
-                if user_msg is None:
-                    per_request.setdefault("messages", []).append(
-                        {"role": "user", "content": []}
-                    )
-                    user_msg = per_request["messages"][-1]
-                user_msg["content"].append(
-                    {"type": "image_url", "image_url": {"url": data_url}}
-                )
-                per_request = self.page_loader.build_request(per_request)
-                response, status_code = self.ocr_client.process(per_request)
-                if status_code != 200:
-                    raise Exception(
-                        f"OCR request failed: {response}, status_code: {status_code}"
-                    )
-                content = (
-                    response.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content", "")
-                )
-                unit_contents.setdefault(u, []).append(content)
-            for u in range(num_units):
-                contents_u = unit_contents.get(u, [])
-                if len(contents_u) == 1:
-                    (
-                        json_result,
-                        markdown_result,
-                    ) = self.result_formatter.format_ocr_result(contents_u[0])
-                else:
-                    (
-                        json_result,
-                        markdown_result,
-                    ) = self.result_formatter.format_multi_page_results(contents_u)
-                yield PipelineResult(
-                    json_result=json_result,
-                    markdown_result=markdown_result,
-                    original_images=[original_inputs[u]],
-                    layout_vis_dir=layout_vis_output_dir,
-                )
-            return
 
         image_urls = self._extract_image_urls(request_data)
         if not image_urls:
@@ -715,8 +606,7 @@ class Pipeline:
     def start(self):
         """Start the pipeline."""
         logger.info("Starting Pipeline...")
-        if self.enable_layout:
-            self.layout_detector.start()
+        self.layout_detector.start()
         self.ocr_client.start()
         logger.info("Pipeline started!")
 
@@ -724,8 +614,7 @@ class Pipeline:
         """Stop the pipeline."""
         logger.info("Stopping Pipeline...")
         self.ocr_client.stop()
-        if self.enable_layout:
-            self.layout_detector.stop()
+        self.layout_detector.stop()
         logger.info("Pipeline stopped!")
 
     def __enter__(self):

@@ -69,7 +69,6 @@ class GlmOcr:
         model: Optional[str] = None,
         mode: Optional[str] = None,
         timeout: Optional[int] = None,
-        enable_layout: Optional[bool] = None,
         log_level: Optional[str] = None,
         # Extra knobs for self-hosted mode & GPU binding
         ocr_api_host: Optional[str] = None,
@@ -90,7 +89,6 @@ class GlmOcr:
                       If *api_key* is provided without an explicit *mode*,
                       mode defaults to ``"maas"``.
             timeout:  Request timeout in seconds.
-            enable_layout: Whether to run layout detection.
             log_level: Logging level (DEBUG, INFO, WARNING, ERROR).
         """
         # If user provides api_key but no explicit mode, default to MaaS.
@@ -105,7 +103,6 @@ class GlmOcr:
             model=model,
             mode=mode,
             timeout=timeout,
-            enable_layout=enable_layout,
             log_level=log_level,
             ocr_api_host=ocr_api_host,
             ocr_api_port=ocr_api_port,
@@ -128,14 +125,12 @@ class GlmOcr:
 
             self._maas_client = MaaSClient(self.config_model.pipeline.maas)
             self._maas_client.start()
-            self.enable_layout = True  # MaaS always includes layout
             logger.info("GLM-OCR initialized in MaaS mode (cloud API passthrough)")
         else:
             # Self-hosted mode: use full Pipeline
             from glmocr.pipeline import Pipeline
 
             self._pipeline = Pipeline(config=self.config_model.pipeline)
-            self.enable_layout = self._pipeline.enable_layout
             self._pipeline.start()
             logger.info("GLM-OCR initialized in self-hosted mode")
 
@@ -439,7 +434,7 @@ class GlmOcr:
         request_data = {"messages": messages}
 
         layout_vis_dir = None
-        if self._pipeline.enable_layout and save_layout_visualization:
+        if save_layout_visualization:
             layout_vis_dir = tempfile.mkdtemp(prefix="layout_vis_")
 
         results = list(
@@ -475,7 +470,7 @@ class GlmOcr:
         request_data = {"messages": messages}
 
         layout_vis_dir = None
-        if self._pipeline.enable_layout and save_layout_visualization:
+        if save_layout_visualization:
             layout_vis_dir = tempfile.mkdtemp(prefix="layout_vis_")
 
         for result in self._pipeline.process(
@@ -596,7 +591,6 @@ def parse(
     model: Optional[str] = None,
     mode: Optional[str] = None,
     timeout: Optional[int] = None,
-    enable_layout: Optional[bool] = None,
     log_level: Optional[str] = None,
     **kwargs: Any,
 ) -> Union[PipelineResult, List[PipelineResult], Generator[PipelineResult, None, None]]:
@@ -637,7 +631,6 @@ def parse(
         model:    Model name.
         mode:     ``"maas"`` or ``"selfhosted"``.
         timeout:  Request timeout in seconds.
-        enable_layout: Whether to run layout detection.
         log_level: Logging level.
 
     Returns:
@@ -661,7 +654,6 @@ def parse(
         model=model,
         mode=mode,
         timeout=timeout,
-        enable_layout=enable_layout,
         log_level=log_level,
     ) as parser:
         return parser.parse(

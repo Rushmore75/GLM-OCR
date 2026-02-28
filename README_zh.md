@@ -248,9 +248,6 @@ pipeline:
   # Result formatting
   result_formatter:
     output_format: both # json, markdown, or both
-
-  # Layout detection (optional)
-  enable_layout: false
 ```
 
 更多选项请参考 [config.yaml](glmocr/config.yaml)。

@@ -44,8 +44,6 @@ _ENV_MAP: Dict[str, str] = {
     "OCR_API_HOST": "pipeline.ocr_api.api_host",
     "OCR_API_PORT": "pipeline.ocr_api.api_port",
     "OCR_MODEL": "pipeline.ocr_api.model",
-    # Layout
-    "ENABLE_LAYOUT": "pipeline.enable_layout",
     # Allow overriding which GPU(s) the layout model uses
     "LAYOUT_CUDA_VISIBLE_DEVICES": "pipeline.layout.cuda_visible_devices",
     # Logging
@@ -192,8 +190,6 @@ class LayoutConfig(_BaseConfig):
 
 
 class PipelineConfig(_BaseConfig):
-    enable_layout: bool = False
-
     # MaaS mode configuration (Zhipu cloud API passthrough)
     maas: MaaSApiConfig = Field(default_factory=MaaSApiConfig)
 
@@ -224,11 +220,8 @@ def _set_nested(data: Dict[str, Any], dotted_path: str, value: Any) -> None:
 def _coerce_env_value(dotted_path: str, raw: str) -> Any:
     """Coerce a raw environment-variable string to the expected Python type."""
     # Boolean fields
-    if dotted_path in ("pipeline.maas.enabled", "pipeline.enable_layout"):
-        # Special handling for MODE: "maas" → True, anything else → False
-        if dotted_path == "pipeline.maas.enabled":
-            return raw.strip().lower() in ("maas", "true", "1", "yes")
-        return raw.strip().lower() in ("true", "1", "yes")
+    if dotted_path == "pipeline.maas.enabled":
+        return raw.strip().lower() in ("maas", "true", "1", "yes")
     # Integer fields
     if dotted_path.endswith((".api_port", ".request_timeout", ".connect_timeout")):
         return int(raw)
@@ -317,7 +310,6 @@ class GlmOcrConfig(_BaseConfig):
         * ``model``          – model name
         * ``mode``           – ``"maas"`` or ``"selfhosted"``
         * ``timeout``        – request timeout in seconds
-        * ``enable_layout``  – whether to run layout detection
         * ``log_level``      – logging level (DEBUG / INFO / …)
 
         Any other keyword is silently ignored so that callers can safely
@@ -360,7 +352,6 @@ class GlmOcrConfig(_BaseConfig):
             "model": "pipeline.maas.model",
             "mode": "pipeline.maas.enabled",
             "timeout": "pipeline.maas.request_timeout",
-            "enable_layout": "pipeline.enable_layout",
             "log_level": "logging.level",
             # Self-hosted OCR API
             "ocr_api_host": "pipeline.ocr_api.api_host",

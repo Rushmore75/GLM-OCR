@@ -66,9 +66,6 @@ def main():
     # Parse all images in a directory
   glmocr parse ./images/
 
-    # Disable layout detection (OCR-only): set pipeline.enable_layout=false
-    glmocr parse image.png --config my_config.yaml
-
     # Specify output directory
   glmocr parse image.png --output ./output/
 
@@ -99,7 +96,7 @@ def main():
     parse_parser.add_argument(
         "--no-layout-vis",
         action="store_true",
-        help="Do not save layout visualization results (only effective when enable_layout=true)",
+        help="Do not save layout visualization results",
     )
     parse_parser.add_argument(
         "--config",
@@ -145,10 +142,7 @@ def main():
         save_layout_vis = not args.no_layout_vis
 
         with GlmOcr(config_path=args.config) as glm_parser:
-            logger.info(
-                "Using Pipeline (enable_layout=%s)...",
-                "true" if glm_parser.enable_layout else "false",
-            )
+            logger.info("Using Pipeline...")
 
             # Process each file (parse() with str returns a single PipelineResult)
             total_files = len(image_paths)

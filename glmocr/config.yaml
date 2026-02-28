@@ -147,10 +147,6 @@ pipeline:
 
   # Result formatter: post-processing and output formatting
   result_formatter:
-    # Filter nested regions (remove overlapping smaller regions)
-    filter_nested: true
-    min_overlap_ratio: 0.8
-
     # Output format: json, markdown, or both
     output_format: both
 
@@ -178,12 +174,7 @@ pipeline:
         - seal
         - formula_number
 
-  # Enable layout detection mode
-  # - true: detect document regions (tables, figures, text blocks) then OCR each
-  # - false: direct OCR on the whole image
-  enable_layout: true
-
-  # Layout detection settings (used when enable_layout=true)
+  # Layout detection settings
   layout:
     # PP-DocLayoutV3 model directory
     # Can be a local folder or a Hugging Face model id
