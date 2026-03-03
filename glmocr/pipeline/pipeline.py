@@ -158,12 +158,14 @@ class Pipeline:
 
         try:
             yield from self._emit_results(state, tracker, original_inputs, layout_vis_output_dir)
-            t1.join()
-            t2.join()
-            t3.join()
-            state.raise_if_exceptions()
         finally:
+            state.request_shutdown()
+            t1.join(timeout=10)
+            t2.join(timeout=10)
+            t3.join(timeout=10)
             self._current_state = None
+
+        state.raise_if_exceptions()
 
     def get_queue_stats(self) -> Optional[Dict[str, int]]:
         """Return current queue sizes, or ``None`` if no processing is active."""

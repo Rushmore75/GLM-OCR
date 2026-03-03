@@ -54,6 +54,44 @@ class PipelineState:
         self._exceptions: List[Dict[str, Any]] = []
         self._exception_lock = threading.Lock()
 
+        # ── Shutdown coordination ─────────────────────────────────────
+        self._shutdown_event = threading.Event()
+
+    # ------------------------------------------------------------------
+    # Shutdown helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def is_shutdown(self) -> bool:
+        return self._shutdown_event.is_set()
+
+    def request_shutdown(self) -> None:
+        """Signal all workers to stop processing."""
+        self._shutdown_event.set()
+        tracker = self._tracker
+        if tracker is not None:
+            tracker.signal_shutdown()
+
+    def safe_put(self, q: queue.Queue, msg: Dict[str, Any],
+                 timeout: float = 0.5) -> bool:
+        """Put *msg* on *q*, returning ``False`` if shutdown was requested."""
+        while not self._shutdown_event.is_set():
+            try:
+                q.put(msg, timeout=timeout)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    @staticmethod
+    def drain_queue(q: queue.Queue) -> None:
+        """Drain all items from *q* to unblock any blocked producers."""
+        while True:
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                break
+
     # ------------------------------------------------------------------
     # Page registration (delegated to tracker)
     # ------------------------------------------------------------------
@@ -117,6 +155,7 @@ class PipelineState:
     def record_exception(self, source: str, exc: Exception) -> None:
         with self._exception_lock:
             self._exceptions.append({"source": source, "exception": exc})
+        self._shutdown_event.set()
         tracker = self._tracker
         if tracker is not None:
             tracker.signal_shutdown()

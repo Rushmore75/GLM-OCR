@@ -4,32 +4,30 @@ Stage 1 (data_loading_worker):   Load pages from URLs → page_queue
 Stage 2 (layout_worker):         Layout detection     → region_queue
 Stage 3 (recognition_worker):    Parallel OCR         → recognition_results
 
-Queue message formats:
+Queue message formats
+---------------------
+page_queue::
 
-    page_queue::
-        {"identifier": "image",     "page_idx": int, "unit_idx": int,
-         "image": PIL.Image}
-        {"identifier": "unit_done", "unit_idx": int}   ← all pages for this
-                                                          unit have been queued
-        {"identifier": "done"}
-        {"identifier": "error"}
+    {"identifier": "image",     "page_idx": int, "unit_idx": int,
+     "image": PIL.Image}
+    {"identifier": "unit_done", "unit_idx": int}
+    {"identifier": "done"}
 
-    region_queue::
-        {"identifier": "region", "page_idx": int, "cropped_image": PIL.Image,
-         "region": dict, "task_type": str}
-        {"identifier": "done"}
-        {"identifier": "error"}
+region_queue::
+
+    {"identifier": "region", "page_idx": int, "cropped_image": PIL.Image,
+     "region": dict}
+    {"identifier": "done"}
 """
 
 from __future__ import annotations
 
 import queue
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from glmocr.pipeline._common import (
     IDENTIFIER_DONE,
-    IDENTIFIER_ERROR,
     IDENTIFIER_IMAGE,
     IDENTIFIER_REGION,
     IDENTIFIER_UNIT_DONE,
@@ -76,48 +74,53 @@ def data_loading_worker(
     sent_unit_done: set = set()
     try:
         for page, unit_idx in page_loader.iter_pages_with_unit_indices(image_urls):
+            if state.is_shutdown:
+                break
+
             if prev_unit_idx is not None and unit_idx != prev_unit_idx:
-                state.page_queue.put({
+                if not state.safe_put(state.page_queue, {
                     "identifier": IDENTIFIER_UNIT_DONE,
                     "unit_idx": prev_unit_idx,
-                })
+                }):
+                    break
                 sent_unit_done.add(prev_unit_idx)
 
             state.register_page(page_idx, unit_idx)
             state.images_dict[page_idx] = page
-            state.page_queue.put({
+            if not state.safe_put(state.page_queue, {
                 "identifier": IDENTIFIER_IMAGE,
                 "page_idx": page_idx,
                 "unit_idx": unit_idx,
                 "image": page,
-            })
+            }):
+                break
             unit_indices_list.append(unit_idx)
             page_idx += 1
             state.num_images_loaded[0] = page_idx
             state.unit_indices_holder[0] = list(unit_indices_list)
             prev_unit_idx = unit_idx
 
-        if prev_unit_idx is not None:
-            state.page_queue.put({
-                "identifier": IDENTIFIER_UNIT_DONE,
-                "unit_idx": prev_unit_idx,
-            })
-            sent_unit_done.add(prev_unit_idx)
-
-        for u in range(num_units):
-            if u not in sent_unit_done:
-                state.page_queue.put({
+        if not state.is_shutdown:
+            if prev_unit_idx is not None:
+                state.safe_put(state.page_queue, {
                     "identifier": IDENTIFIER_UNIT_DONE,
-                    "unit_idx": u,
+                    "unit_idx": prev_unit_idx,
                 })
+                sent_unit_done.add(prev_unit_idx)
 
-        state.page_queue.put({"identifier": IDENTIFIER_DONE})
+            for u in range(num_units):
+                if u not in sent_unit_done:
+                    state.safe_put(state.page_queue, {
+                        "identifier": IDENTIFIER_UNIT_DONE,
+                        "unit_idx": u,
+                    })
+
+            state.safe_put(state.page_queue, {"identifier": IDENTIFIER_DONE})
     except Exception as e:
         logger.exception("Data loading worker error: %s", e)
         state.num_images_loaded[0] = page_idx
         state.unit_indices_holder[0] = list(unit_indices_list)
         state.record_exception("DataLoadingWorker", e)
-        state.page_queue.put({"identifier": IDENTIFIER_ERROR})
 
 
 # ======================================================================
@@ -144,10 +147,12 @@ def layout_worker(
         batch_unit_indices: List[int] = []
         global_start_idx = 0
 
-        # page_indices seen so far per unit, used to compute region counts.
         unit_page_indices: Dict[int, List[int]] = {}
 
         while True:
+            if state.is_shutdown:
+                break
+
             try:
                 msg = state.page_queue.get(timeout=0.01)
             except queue.Empty:
@@ -203,17 +208,14 @@ def layout_worker(
                         state, layout_detector, batch_images, batch_page_indices,
                         save_visualization, vis_output_dir, global_start_idx,
                     )
-                state.region_queue.put({"identifier": IDENTIFIER_DONE})
-                break
-
-            elif identifier == IDENTIFIER_ERROR:
-                state.region_queue.put({"identifier": IDENTIFIER_ERROR})
+                state.safe_put(state.region_queue, {"identifier": IDENTIFIER_DONE})
                 break
 
     except Exception as e:
         logger.exception("Layout worker error: %s", e)
         state.record_exception("LayoutWorker", e)
-        state.region_queue.put({"identifier": IDENTIFIER_ERROR})
+    finally:
+        state.drain_queue(state.page_queue)
 
 
 def _flush_layout_batch(
@@ -238,12 +240,13 @@ def _flush_layout_batch(
         state.layout_results_dict[page_idx] = layout_result
         for region in layout_result:
             cropped = crop_image_region(image, region["bbox_2d"], region["polygon"])
-            state.region_queue.put({
+            if not state.safe_put(state.region_queue, {
                 "identifier": IDENTIFIER_REGION,
                 "page_idx": page_idx,
                 "cropped_image": cropped,
                 "region": region,
-            })
+            }):
+                return
 
 
 # ======================================================================
@@ -257,6 +260,7 @@ def recognition_worker(
     max_workers: int,
 ) -> None:
     """Consume regions, run parallel OCR, store results."""
+    executor = None
     try:
         concurrency = min(max_workers, 128)
         executor = ThreadPoolExecutor(max_workers=concurrency)
@@ -264,6 +268,9 @@ def recognition_worker(
         processing_complete = False
 
         while True:
+            if state.is_shutdown:
+                break
+
             _collect_done_futures(futures, state)
 
             if len(futures) >= concurrency:
@@ -297,16 +304,22 @@ def recognition_worker(
             elif identifier == IDENTIFIER_DONE:
                 processing_complete = True
 
-            elif identifier == IDENTIFIER_ERROR:
-                break
-
-        for future in as_completed(futures.keys()):
-            _handle_future_result(future, futures, state)
-        executor.shutdown(wait=True)
+        if not state.is_shutdown:
+            for future in as_completed(futures.keys()):
+                _handle_future_result(future, futures, state)
+            executor.shutdown(wait=True)
+        else:
+            for f in list(futures):
+                f.cancel()
+            executor.shutdown(wait=False)
 
     except Exception as e:
         logger.exception("Recognition worker error: %s", e)
         state.record_exception("RecognitionWorker", e)
+        if executor is not None:
+            executor.shutdown(wait=False)
+    finally:
+        state.drain_queue(state.region_queue)
 
 
 # ------------------------------------------------------------------
