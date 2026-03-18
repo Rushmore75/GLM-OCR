@@ -119,6 +119,15 @@ class OCRClient:
         if self._session is None:
             self._session = self._make_session()
 
+    def is_alive(self, timeout: float = 5.0) -> bool:
+        """Quick socket-level check whether the API port is still reachable."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(timeout)
+                return sock.connect_ex((self.api_host, self.api_port)) == 0
+        except Exception:
+            return False
+
     def stop(self):
         """No-op: this client does not manage server lifecycle."""
         logger.debug("API recognizer does not manage server lifecycle.")

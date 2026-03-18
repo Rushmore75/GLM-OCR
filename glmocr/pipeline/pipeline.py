@@ -154,6 +154,13 @@ class Pipeline:
         t2.start()
         t3.start()
 
+        t_watchdog = threading.Thread(
+            target=self._health_watchdog,
+            args=(state,),
+            daemon=True,
+        )
+        t_watchdog.start()
+
         try:
             yield from self._emit_results(state, tracker, original_inputs)
         finally:
@@ -161,6 +168,7 @@ class Pipeline:
             t1.join(timeout=10)
             t2.join(timeout=10)
             t3.join(timeout=10)
+            t_watchdog.join(timeout=5)
             self._current_state = None
 
         state.raise_if_exceptions()
@@ -201,6 +209,35 @@ class Pipeline:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
+
+    # ------------------------------------------------------------------
+    # Health watchdog
+    # ------------------------------------------------------------------
+
+    def _health_watchdog(
+        self,
+        state: PipelineState,
+        check_interval: float = 5.0,
+    ) -> None:
+        """Daemon thread that monitors OCR service liveness.
+
+        Periodically probes the API port via socket.  On the first
+        failure the pipeline is shut down immediately so that workers
+        stop instead of accumulating failed requests.
+        """
+        while not state.is_shutdown:
+            state._shutdown_event.wait(check_interval)
+            if state.is_shutdown:
+                break
+
+            if not self.ocr_client.is_alive():
+                error = RuntimeError(
+                    f"OCR service at {self.ocr_client.api_host}:{self.ocr_client.api_port} "
+                    f"is no longer available"
+                )
+                logger.error("%s", error)
+                state.record_exception("HealthWatchdog", error)
+                break
 
     # ------------------------------------------------------------------
     # Private helpers
