@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional, Union, List
 
 import yaml
 from dotenv import dotenv_values
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Environment variable prefix for all GLM-OCR settings.
 ENV_PREFIX = "GLMOCR_"
@@ -48,6 +48,8 @@ _ENV_MAP: Dict[str, str] = {
     "ENABLE_LAYOUT": "pipeline.enable_layout",
     # Allow overriding which GPU(s) the layout model uses
     "LAYOUT_CUDA_VISIBLE_DEVICES": "pipeline.layout.cuda_visible_devices",
+    # Explicit device for layout model: "cpu", "cuda", "cuda:0", etc.
+    "LAYOUT_DEVICE": "pipeline.layout.device",
     # Logging
     "LOG_LEVEL": "logging.level",
 }
@@ -188,11 +190,46 @@ class LayoutConfig(_BaseConfig):
     batch_size: int = 8
     workers: int = 1
     cuda_visible_devices: str = "0"
+    # Explicit device placement for the layout model.
+    # - null (default): auto-select using cuda_visible_devices if CUDA is
+    #   available, otherwise CPU.  This preserves backward compatibility.
+    # - "cpu": force CPU even when CUDA is available.
+    # - "cuda": use the default CUDA device.
+    # - "cuda:N": use a specific CUDA device (overrides cuda_visible_devices).
+    device: Optional[str] = None
     img_size: Optional[int] = None
     layout_nms: bool = True
     layout_unclip_ratio: Optional[Any] = None
     layout_merge_bboxes_mode: Union[str, Dict[int, str]] = "large"
     label_task_mapping: Optional[Dict[str, Any]] = None
+
+    @field_validator("device")
+    @classmethod
+    def _validate_device(cls, value: Optional[str]) -> Optional[str]:
+        """Validate the layout device string.
+
+        Allowed values:
+        - None / null (auto-select based on CUDA availability)
+        - "cpu"
+        - "cuda"
+        - "cuda:<int>" (e.g., "cuda:0", "cuda:1")
+        """
+        if value is None:
+            return value
+        v = value.strip()
+        if v == "":
+            # Treat empty string as "unset" for convenience.
+            return None
+        if v == "cpu" or v == "cuda":
+            return v
+        if v.startswith("cuda:"):
+            index_part = v[5:]
+            if index_part.isdigit():
+                return v
+        raise ValueError(
+            "Invalid layout device value. Expected one of: None, 'cpu', 'cuda', "
+            "or 'cuda:<int>' (e.g., 'cuda:0')."
+        )
 
 
 class PipelineConfig(_BaseConfig):
@@ -403,6 +440,7 @@ class GlmOcrConfig(_BaseConfig):
             "ocr_api_port": "pipeline.ocr_api.api_port",
             # Layout GPU binding
             "cuda_visible_devices": "pipeline.layout.cuda_visible_devices",
+            "layout_device": "pipeline.layout.device",
         }
         for kw, dotted in _KW_MAP.items():
             if kw in overrides and overrides[kw] is not None:
