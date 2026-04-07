@@ -64,10 +64,12 @@ class PPDocLayoutDetector(BaseLayoutDetector):
                 "detection. Set it to a local checkpoint directory or a Hugging "
                 "Face model id such as 'PaddlePaddle/PP-DocLayoutV3_safetensors'."
             )
-        if not isinstance(self.label_task_mapping, dict) or not self.label_task_mapping:
+        if self.label_task_mapping is not None and (
+            not isinstance(self.label_task_mapping, dict) or not self.label_task_mapping
+        ):
             raise ValueError(
                 "pipeline.layout.label_task_mapping must be a non-empty mapping "
-                "when layout detection is enabled."
+                "when provided."
             )
 
     def start(self):
@@ -92,7 +94,12 @@ class PPDocLayoutDetector(BaseLayoutDetector):
             self._device = "cpu"
         self._model = self._model.to(self._device)
         if self.id2label is None:
-            self.id2label = self._model.config.id2label
+            self.id2label = getattr(self._model.config, "id2label", None)
+        if self.id2label is None:
+            raise RuntimeError(
+                "Missing id2label in both layout config and model config; "
+                "please set pipeline.layout.id2label."
+            )
 
         # Patch upstream _extract_polygon_points_by_masks to guard against
         # empty mask crops that crash cv2.resize with !ssize.empty().
@@ -141,6 +148,11 @@ class PPDocLayoutDetector(BaseLayoutDetector):
             return polygon_points
 
         self._image_processor._extract_polygon_points_by_masks = _safe_extract
+        if self.label_task_mapping is None:
+            logger.warning(
+                "layout.label_task_mapping is missing; defaulting all labels to text"
+            )
+            self.label_task_mapping = {"text": list(self.id2label.values())}
         logger.debug(f"PP-DocLayoutV3 loaded on device: {self._device}")
 
     def stop(self):

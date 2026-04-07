@@ -261,6 +261,66 @@ class TestLayoutDeviceUnit:
 
         assert det.id2label == cfg.id2label
 
+    def test_detector_defaults_label_task_mapping_from_model_id2label(self):
+        """Missing label_task_mapping falls back to a text bucket from id2label."""
+        self._require_layout_runtime()
+        from glmocr.config import LayoutConfig
+        from glmocr.layout.layout_detector import PPDocLayoutDetector
+
+        cfg = LayoutConfig(model_dir="dummy", device="cpu")
+        det = PPDocLayoutDetector(cfg)
+
+        mock_model = MagicMock()
+        mock_model.to = MagicMock(return_value=mock_model)
+        mock_model.eval = MagicMock()
+        mock_model.config = MagicMock()
+        mock_model.config.id2label = {0: "text", 1: "title"}
+        mock_proc = MagicMock()
+
+        with (
+            patch(
+                "glmocr.layout.layout_detector.PPDocLayoutV3ForObjectDetection.from_pretrained",
+                return_value=mock_model,
+            ),
+            patch(
+                "glmocr.layout.layout_detector.PPDocLayoutV3ImageProcessor.from_pretrained",
+                return_value=mock_proc,
+            ),
+        ):
+            det.start()
+
+        assert det.id2label == {0: "text", 1: "title"}
+        assert det.label_task_mapping == {"text": ["text", "title"]}
+
+    def test_detector_raises_when_id2label_missing_everywhere(self):
+        """Missing id2label in both config and model config raises a clear error."""
+        self._require_layout_runtime()
+        from glmocr.config import LayoutConfig
+        from glmocr.layout.layout_detector import PPDocLayoutDetector
+
+        cfg = LayoutConfig(model_dir="dummy", device="cpu")
+        det = PPDocLayoutDetector(cfg)
+
+        mock_model = MagicMock()
+        mock_model.to = MagicMock(return_value=mock_model)
+        mock_model.eval = MagicMock()
+        mock_model.config = MagicMock()
+        mock_model.config.id2label = None
+        mock_proc = MagicMock()
+
+        with (
+            patch(
+                "glmocr.layout.layout_detector.PPDocLayoutV3ForObjectDetection.from_pretrained",
+                return_value=mock_model,
+            ),
+            patch(
+                "glmocr.layout.layout_detector.PPDocLayoutV3ImageProcessor.from_pretrained",
+                return_value=mock_proc,
+            ),
+            pytest.raises(RuntimeError, match="Missing id2label"),
+        ):
+            det.start()
+
 
 class TestPageLoader:
     """Tests for PageLoader."""
