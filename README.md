@@ -113,7 +113,7 @@ pip install "glmocr[selfhosted]"
 Install vLLM:
 
 ```bash
-docker pull vllm/vllm-openai:nightly
+docker pull vllm/vllm-openai:v0.19.0-ubuntu2404
 ```
 
 Or using with pip:
@@ -127,15 +127,18 @@ Launch the service:
 ```bash
 pip install "transformers>=5.3.0"
 
-vllm serve zai-org/GLM-OCR --allowed-local-media-path / --port 8080 --speculative-config '{"method": "mtp", "num_speculative_tokens": 1}' --served-model-name glm-ocr
+vllm serve zai-org/GLM-OCR  --port 8080 --speculative-config '{"method": "mtp", "num_speculative_tokens": 3}' --served-model-name glm-ocr
 ```
+
+>Note
+  Add `--max-model-len` and `--gpu-memory-utilization` according to Your own machine to handle large image/pdf
 
 ##### Using SGLang
 
 Install SGLang:
 
 ```bash
-docker pull lmsysorg/sglang:dev
+docker pull lmsysorg/sglang:v0.5.10
 ```
 
 Or using with pip:
@@ -152,7 +155,18 @@ pip install "transformers>=5.3.0"
 sglang serve --model zai-org/GLM-OCR --port 8080 --speculative-algorithm NEXTN --speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4 --served-model-name glm-ocr
 ```
 
-##### Update Configuration
+>Note
+  Add `--context-len` and `--mem-fraction-static` according to Your own machine to handle large image/pdf
+
+
+#### Option 3: Ollama/MLX
+
+For specialized deployment scenarios, see the detailed guides:
+
+- **[Apple Silicon with mlx-vlm](examples/mlx-deploy/README.md)** - Optimized for Apple Silicon Macs
+- **[Ollama Deployment](examples/ollama-deploy/README.md)** - Simple local deployment with Ollama
+
+#### Update Configuration
 
 After launching the service, configure `config.yaml`:
 
@@ -164,13 +178,6 @@ pipeline:
     api_host: localhost # or your vLLM/SGLang server address
     api_port: 8080
 ```
-
-#### Option 3: Ollama/MLX
-
-For specialized deployment scenarios, see the detailed guides:
-
-- **[Apple Silicon with mlx-vlm](examples/mlx-deploy/README.md)** - Optimized for Apple Silicon Macs
-- **[Ollama Deployment](examples/ollama-deploy/README.md)** - Simple local deployment with Ollama
 
 ### SDK Usage Guide
 
@@ -258,93 +265,6 @@ Semantics:
 - A list is treated as pages of a single document.
 - For multiple independent documents, call the endpoint multiple times (one document per request).
 
-### Configuration
-
-Configuration priority (highest to lowest):
-
-1. CLI `--set` overrides
-2. Python API keyword arguments
-3. `GLMOCR_*` environment variables / `.env` file
-4. YAML config file
-5. Built-in defaults
-
-Full configuration in `glmocr/config.yaml`:
-
-```yaml
-# Server (for glmocr.server)
-server:
-  host: "0.0.0.0"
-  port: 5002
-  debug: false
-
-# Logging
-logging:
-  level: INFO # DEBUG enables profiling
-
-# Pipeline
-pipeline:
-  # OCR API connection
-  ocr_api:
-    api_host: localhost
-    api_port: 8080
-    api_key: null # or set API_KEY env var
-    connect_timeout: 30
-    request_timeout: 120
-
-  # Page loader settings
-  page_loader:
-    max_tokens: 8192
-    temperature: 0.0
-    image_format: JPEG
-    min_pixels: 12544
-    max_pixels: 71372800
-
-  # Result formatting
-  result_formatter:
-    output_format: both # json, markdown, or both
-
-  # Layout model device placement
-  layout:
-    # device: null   # null=auto, "cpu", "cuda", or "cuda:N"
-```
-
-See [config.yaml](glmocr/config.yaml) for all options.
-
-### Output Formats
-
-Here are two examples of output formats:
-
-- JSON
-
-```json
-[[{ "index": 0, "label": "text", "content": "...", "bbox_2d": null }]]
-```
-
-- Markdown
-
-```markdown
-# Document Title
-
-Body...
-
-| Table | Content |
-| ----- | ------- |
-| ...   | ...     |
-```
-
-### Example of full pipeline
-
-you can run example code like：
-
-```bash
-python examples/example.py
-```
-
-Output structure (one folder per input):
-
-- `result.json` – structured OCR result
-- `result.md` – Markdown result
-- `imgs/` – cropped image regions (when layout mode is enabled)
 
 ### Modular Architecture
 
