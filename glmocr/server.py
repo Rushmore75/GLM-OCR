@@ -87,6 +87,12 @@ def create_app(config: "GlmOcrConfig") -> Flask:
         if isinstance(images, str):
             images = [images]
 
+        # Compatibility: MaaS client uses "file" field instead of "images"
+        if not images and "file" in data:
+            file_val = data["file"]
+            if isinstance(file_val, str) and file_val:
+                images = [file_val]
+
         if not images:
             return jsonify({"error": "No images provided"}), 400
 
